@@ -1,0 +1,7 @@
+version: "3"
+
+services:
+  # Your other services.
+
+  gotenberg:
+    image: gotenberg/gotenberg:7
