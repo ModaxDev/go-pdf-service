@@ -2,8 +2,9 @@ package main
 
 import (
 	"bytes"
-	"github.com/joho/godotenv"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -11,20 +12,52 @@ import (
 )
 
 func main() {
-	err := godotenv.Load()
+	http.HandleFunc("/upload", handler)
+
+	println("Starting server on port 8080")
+	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
+		panic(err)
+	}
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Error while uploading file", http.StatusBadRequest)
 		return
 	}
-	start := time.Now()
+	defer file.Close()
+	var now = time.Now()
+	var fileName = now.String() + header.Filename + ".pdf"
 
-	response, err := postFile(os.Getenv("URL_LIBREOFFICE"), "template.docx")
+	buffer := &bytes.Buffer{}
+	writer := multipart.NewWriter(buffer)
+	part, err := writer.CreateFormFile("files", "template.docx")
+	if err != nil {
+		panic(err)
+	}
+
+	io.Copy(part, file)
+	err = writer.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	request, err := http.NewRequest("POST", "http://localhost:3000/forms/libreoffice/convert", buffer)
+	if err != nil {
+		panic(err)
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{}
+	response, err := client.Do(request)
 	if err != nil {
 		panic(err)
 	}
 
 	defer response.Body.Close()
-
-	resultFile, err := os.Create("result.pdf")
+	resultFile, err := os.Create(fileName)
 	if err != nil {
 		panic(err)
 	}
@@ -35,39 +68,20 @@ func main() {
 		panic(err)
 	}
 
-	elapsed := time.Since(start)
-	println("Temps d'exécution :", elapsed.Seconds(), "secondes")
-}
-
-func postFile(url string, filePath string) (*http.Response, error) {
-	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, err
+		http.Error(w, "Error while sending the file to the API", http.StatusBadRequest)
+		return
 	}
-	defer file.Close()
+	fileD, err := os.Open(fileName)
+	streamPDFbytes, err := ioutil.ReadAll(fileD)
 
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	part, err := writer.CreateFormFile("files", filePath)
 	if err != nil {
-		return nil, err
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
-	io.Copy(part, file)
-
-	err = writer.Close()
-	if err != nil {
-		return nil, err
-	}
-
-	request, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return nil, err
-	}
-
-	request.Header.Set("Content-Type", writer.FormDataContentType())
-
-	client := &http.Client{}
-	return client.Do(request)
+	// stream straight to client(browser)
+	w.Header().Add("Content-type", "application/pdf")
+	w.Write(streamPDFbytes)
+	os.Remove(fileName)
 }
